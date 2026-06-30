@@ -1,0 +1,37 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Mouse Server",
+      "type": "shell",
+      "command": "py server.py",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Stop Mouse Server",
+      "type": "shell",
+      "command": "powershell -NoProfile -Command \"$processes = @(netstat -ano | findstr ':5000' | ForEach-Object { $_ -replace '^\\s+TCP\\s+.*?\\s+(\\d+).*$', '$1' } | Get-Unique); if ($processes) { $processes | ForEach-Object { taskkill /PID $_ /F } } else { Write-Host 'No process listening on port 5000' }\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

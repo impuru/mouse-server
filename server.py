@@ -17,14 +17,24 @@ import socket
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO
-from pynput.mouse import Button, Controller
+from pynput.mouse import Button, Controller as MouseController
+from pynput.keyboard import Key, Controller as KeyboardController
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "phone-mouse-server"
 socketio = SocketIO(app, cors_allowed_origins="*")
-mouse = Controller()
+mouse = MouseController()
+keyboard = KeyboardController()
 
 BUTTONS = {"left": Button.left, "right": Button.right, "middle": Button.middle}
+
+
+def press_key(key):
+    try:
+        keyboard.press(key)
+        keyboard.release(key)
+    except Exception:
+        pass
 
 
 def get_local_ip() -> str:
@@ -80,6 +90,35 @@ def on_mouse_down(data):
 def on_mouse_up(data):
     btn = BUTTONS.get(data.get("button", "left"), Button.left)
     mouse.release(btn)
+
+
+@socketio.on("player_play")
+def on_player_play(data):
+    press_key(Key.space)
+
+
+@socketio.on("player_pause")
+def on_player_pause(data):
+    press_key('p')
+
+
+@socketio.on("player_prev")
+def on_player_prev(data):
+    press_key(Key.left)
+
+
+@socketio.on("player_next")
+def on_player_next(data):
+    press_key(Key.right)
+
+
+@socketio.on("player_volume")
+def on_player_volume(data):
+    direction = data.get("direction", "up")
+    amount = int(data.get("amount", 1))
+    key = Key.up if direction == "up" else Key.down
+    for _ in range(max(1, amount)):
+        press_key(key)
 
 
 if __name__ == "__main__":
