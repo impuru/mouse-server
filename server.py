@@ -13,9 +13,11 @@ Usage:
 Then open the printed http://<laptop-ip>:5000 address on your phone's browser.
 """
 
+import os
+import platform
 import socket
 
-from flask import Flask, render_template
+from flask import Flask, abort, jsonify, render_template, request, send_file
 from flask_socketio import SocketIO
 from pynput.mouse import Button, Controller
 from pynput.keyboard import Controller as KeyboardController
@@ -59,9 +61,82 @@ def get_local_ip() -> str:
     return ip
 
 
+DRIVES_TOKEN = "__drives__"
+
+
+def list_drives():
+    """Windows drive letters (C:\\, D:\\, ...). Just '/' on macOS/Linux."""
+    if platform.system() == "Windows":
+        import string
+        from ctypes import windll
+
+        drives = []
+        bitmask = windll.kernel32.GetLogicalDrives()
+        for letter in string.ascii_uppercase:
+            if bitmask & 1:
+                drives.append(f"{letter}:\\")
+            bitmask >>= 1
+        return drives
+    return ["/"]
+
+
+def compute_parent(path: str):
+    """Parent dir for `path`, or DRIVES_TOKEN/None once at a filesystem root."""
+    parent = os.path.dirname(path)
+    if parent == path:
+        return DRIVES_TOKEN if platform.system() == "Windows" else None
+    return parent
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/browse")
+def api_browse():
+    raw_path = request.args.get("path")
+
+    if raw_path == DRIVES_TOKEN:
+        entries = [
+            {"name": d, "path": d, "is_dir": True, "size": None}
+            for d in list_drives()
+        ]
+        return jsonify({"path": DRIVES_TOKEN, "parent": None, "entries": entries})
+
+    path = os.path.realpath(raw_path) if raw_path else os.path.expanduser("~")
+
+    if not os.path.isdir(path):
+        return jsonify({"error": "That folder doesn't exist or isn't accessible."}), 400
+
+    entries = []
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    size = None if is_dir else entry.stat(follow_symlinks=False).st_size
+                    entries.append(
+                        {"name": entry.name, "path": entry.path, "is_dir": is_dir, "size": size}
+                    )
+                except OSError:
+                    continue
+    except PermissionError:
+        return jsonify({"error": "Permission denied for this folder."}), 403
+
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    return jsonify({"path": path, "parent": compute_parent(path), "entries": entries})
+
+
+@app.route("/api/download")
+def api_download():
+    raw_path = request.args.get("path")
+    if not raw_path:
+        abort(400)
+    path = os.path.realpath(raw_path)
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, as_attachment=True)
 
 
 @socketio.on("move")
