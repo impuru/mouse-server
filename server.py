@@ -17,24 +17,14 @@ import socket
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO
-from pynput.mouse import Button, Controller as MouseController
-from pynput.keyboard import Key, Controller as KeyboardController
+from pynput.mouse import Button, Controller
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "phone-mouse-server"
 socketio = SocketIO(app, cors_allowed_origins="*")
-mouse = MouseController()
-keyboard = KeyboardController()
+mouse = Controller()
 
 BUTTONS = {"left": Button.left, "right": Button.right, "middle": Button.middle}
-
-
-def press_key(key):
-    try:
-        keyboard.press(key)
-        keyboard.release(key)
-    except Exception:
-        pass
 
 
 def get_local_ip() -> str:
@@ -92,41 +82,14 @@ def on_mouse_up(data):
     mouse.release(btn)
 
 
-@socketio.on("player_play")
-def on_player_play(data):
-    press_key(Key.space)
-
-
-@socketio.on("player_pause")
-def on_player_pause(data):
-    press_key('p')
-
-
-@socketio.on("player_prev")
-def on_player_prev(data):
-    press_key(Key.left)
-
-
-@socketio.on("player_next")
-def on_player_next(data):
-    press_key(Key.right)
-
-
-@socketio.on("player_volume")
-def on_player_volume(data):
-    direction = data.get("direction", "up")
-    amount = int(data.get("amount", 1))
-    key = Key.up if direction == "up" else Key.down
-    for _ in range(max(1, amount)):
-        press_key(key)
-
-
 if __name__ == "__main__":
     ip = get_local_ip()
-    port = 5000
-    print("=" * 50)
-    print(" Phone Mouse Server is running")
-    print(f" On your phone's browser (same Wi-Fi), open:")
-    print(f"   http://{ip}:{port}")
-    print("=" * 50)
+    port = 5001
+    # NOTE: the "SERVER_URL:" line below is parsed by gui.py - keep it intact.
+    print("=" * 50, flush=True)
+    print(" Phone Mouse Server is running", flush=True)
+    print(" On your phone's browser (same Wi-Fi), open:", flush=True)
+    print(f"   http://{ip}:{port}", flush=True)
+    print(f"SERVER_URL:http://{ip}:{port}", flush=True)
+    print("=" * 50, flush=True)
     socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
