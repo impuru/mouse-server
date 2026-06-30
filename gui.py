@@ -12,6 +12,8 @@ Usage:
 import os
 import queue
 import re
+import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -20,6 +22,61 @@ from tkinter import font as tkfont
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVER_SCRIPT = os.path.join(BASE_DIR, "server.py")
+PORT = 5000
+
+
+def is_port_in_use(port=PORT, host="127.0.0.1"):
+    """True if something is already listening on this port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex((host, port)) == 0
+
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
+def find_pid_on_port(port=PORT):
+    """Best-effort lookup of the PID listening on `port`. Returns None if not found."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.check_output(
+                ["netstat", "-ano"], text=True, stderr=subprocess.DEVNULL
+            )
+            for line in out.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    pid = line.split()[-1]
+                    if pid.isdigit():
+                        return int(pid)
+        else:
+            out = subprocess.check_output(
+                ["lsof", "-t", f"-i:{port}", "-sTCP:LISTEN"], text=True, stderr=subprocess.DEVNULL
+            )
+            pids = [p for p in out.split() if p.isdigit()]
+            if pids:
+                return int(pids[0])
+    except Exception:
+        pass
+    return None
+
+
+def kill_pid(pid):
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(pid, signal.SIGTERM)
+        return True
+    except Exception:
+        return False
 
 # Optional QR code support (pip install qrcode[pil]) - falls back gracefully.
 try:
@@ -44,6 +101,7 @@ class MouseServerGUI:
     def __init__(self, root):
         self.root = root
         self.process = None
+        self.external_running = False
         self.log_queue = queue.Queue()
         self.server_url = None
         self.qr_imgtk = None
@@ -118,6 +176,7 @@ class MouseServerGUI:
         self.log_text.pack(fill="both", expand=True)
 
         self.root.after(150, self._poll_log_queue)
+        self.root.after(50, self.check_initial_state)
 
     # ---------- UI helpers ----------
     def _set_qr_placeholder(self):
@@ -146,14 +205,38 @@ class MouseServerGUI:
         self.qr_imgtk = ImageTk.PhotoImage(img)
         self.qr_label.config(image=self.qr_imgtk, text="")
 
+    # ---------- Startup detection ----------
+    def check_initial_state(self):
+        """If a server is already listening on PORT (started earlier, e.g. via
+        terminal or a previous GUI session), reflect that as the default state
+        instead of assuming Stopped."""
+        if is_port_in_use(PORT):
+            self.external_running = True
+            url = f"http://{get_local_ip()}:{PORT}"
+            self.server_url = url
+            self.addr_label.config(text=url.replace("http://", ""))
+            self._set_status(True, "Running (detected on this port)")
+            self.toggle_btn.config(text="Stop Server", bg=BAD, activebackground="#d94e4e")
+            self._render_qr(url)
+            self._append_log(f"Detected an existing server already running on port {PORT}.")
+        else:
+            self._set_status(False, "Stopped")
+
     # ---------- Server process control ----------
     def toggle_server(self):
-        if self.process is None:
+        if self.process is None and not self.external_running:
             self.start_server()
         else:
             self.stop_server()
 
     def start_server(self):
+        if is_port_in_use(PORT):
+            # Something started it between launch and now (e.g. another window).
+            self.external_running = True
+            self._append_log(f"Port {PORT} is already in use - treating as running.")
+            self.check_initial_state()
+            return
+
         if not os.path.exists(SERVER_SCRIPT):
             self._append_log(f"ERROR: server.py not found at {SERVER_SCRIPT}")
             return
@@ -225,18 +308,36 @@ class MouseServerGUI:
         self.root.after(150, self._poll_log_queue)
 
     def stop_server(self):
-        if self.process is None:
-            return
-        self._append_log("Stopping server…")
-        self.toggle_btn.config(state="disabled", text="Stopping…")
-        try:
-            self.process.terminate()
+        if self.process is not None:
+            self._append_log("Stopping server…")
+            self.toggle_btn.config(state="disabled", text="Stopping…")
             try:
-                self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        except Exception as e:
-            self._append_log(f"Error stopping server: {e}")
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+            except Exception as e:
+                self._append_log(f"Error stopping server: {e}")
+            return
+
+        if self.external_running:
+            self.toggle_btn.config(state="disabled", text="Stopping…")
+            self._append_log("Looking for the process on port %d…" % PORT)
+            pid = find_pid_on_port(PORT)
+            if pid and kill_pid(pid):
+                self._append_log(f"Stopped process (PID {pid}).")
+            else:
+                self._append_log(
+                    "Couldn't automatically stop it - close it from the terminal "
+                    "it was started in, or end the Python process manually."
+                )
+            self.external_running = False
+            self.server_url = None
+            self.addr_label.config(text="Not running")
+            self._set_qr_placeholder()
+            self._set_status(False, "Stopped")
+            self.toggle_btn.config(state="normal", text="Start Server", bg=ACCENT, activebackground="#4a78e0")
 
     def on_close(self):
         if self.process is not None:

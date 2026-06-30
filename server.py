@@ -18,13 +18,32 @@ import socket
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 from pynput.mouse import Button, Controller
+from pynput.keyboard import Controller as KeyboardController
+from pynput.keyboard import Key
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "phone-mouse-server"
 socketio = SocketIO(app, cors_allowed_origins="*")
 mouse = Controller()
+keyboard = KeyboardController()
 
 BUTTONS = {"left": Button.left, "right": Button.right, "middle": Button.middle}
+
+KEYS = {
+    "left": Key.left,
+    "right": Key.right,
+    "up": Key.up,
+    "down": Key.down,
+    "space": Key.space,
+    # Real OS media keys, used by the Media tab's play/pause, prev, next.
+    # Most desktop apps (Spotify, browsers, VLC) respond to these directly.
+    "media_play_pause": Key.media_play_pause,
+    "media_previous": Key.media_previous,
+    "media_next": Key.media_next,
+    "media_volume_up": Key.media_volume_up,
+    "media_volume_down": Key.media_volume_down,
+    "media_volume_mute": Key.media_volume_mute,
+}
 
 
 def get_local_ip() -> str:
@@ -82,9 +101,18 @@ def on_mouse_up(data):
     mouse.release(btn)
 
 
+@socketio.on("key")
+def on_key(data):
+    key = KEYS.get(data.get("key"))
+    if key is None:
+        return
+    keyboard.press(key)
+    keyboard.release(key)
+
+
 if __name__ == "__main__":
     ip = get_local_ip()
-    port = 5001
+    port = 5000
     # NOTE: the "SERVER_URL:" line below is parsed by gui.py - keep it intact.
     print("=" * 50, flush=True)
     print(" Phone Mouse Server is running", flush=True)
