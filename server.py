@@ -13,6 +13,13 @@ Usage:
 Then open the printed http://<laptop-ip>:5000 address on your phone's browser.
 """
 
+# IMPORTANT: eventlet's monkey patch must run before any other imports
+# (including stdlib socket/os) or the server's async loop won't be truly
+# cooperative - this is what was causing the ~1-2 minute disconnects, since
+# a blocked event loop misses the WebSocket ping/pong heartbeat.
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import platform
 import socket
@@ -25,7 +32,13 @@ from pynput.keyboard import Key
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "phone-mouse-server"
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="eventlet",
+    ping_interval=25,   # how often the server pings the client (seconds)
+    ping_timeout=60,    # how long to wait for a pong before dropping (seconds)
+)
 mouse = Controller()
 keyboard = KeyboardController()
 
@@ -114,6 +127,9 @@ def api_browse():
         with os.scandir(path) as it:
             for entry in it:
                 try:
+                    if entry.name.startswith('.') and entry.is_dir(follow_symlinks=False):
+                        continue
+
                     is_dir = entry.is_dir(follow_symlinks=False)
                     size = None if is_dir else entry.stat(follow_symlinks=False).st_size
                     entries.append(
@@ -126,6 +142,17 @@ def api_browse():
 
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return jsonify({"path": path, "parent": compute_parent(path), "entries": entries})
+
+
+@app.route("/api/preview")
+def api_preview():
+    raw_path = request.args.get("path")
+    if not raw_path:
+        abort(400)
+    path = os.path.realpath(raw_path)
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, as_attachment=False)
 
 
 @app.route("/api/download")
@@ -195,4 +222,4 @@ if __name__ == "__main__":
     print(f"   http://{ip}:{port}", flush=True)
     print(f"SERVER_URL:http://{ip}:{port}", flush=True)
     print("=" * 50, flush=True)
-    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
